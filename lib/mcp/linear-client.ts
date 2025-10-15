@@ -21,11 +21,18 @@ export interface LinearMCPClient {
   updateTicketAssignee(ticketId: string, assigneeId: string): Promise<void>;
   addTicketComment(ticketId: string, comment: string): Promise<void>;
   createCustomField(ticketId: string, field: LinearCustomField): Promise<void>;
+  updateCustomField(ticketId: string, fieldId: string, value: string | number | boolean | string[]): Promise<void>;
+  getCustomFields(ticketId: string): Promise<LinearCustomFieldValue[]>;
+  getCustomFieldDefinitions(teamId?: string): Promise<LinearCustomField[]>;
   getUsers(): Promise<LinearUser[]>;
   getTeams(): Promise<LinearTeam[]>;
   getTicketById(ticketId: string): Promise<LinearIssue | null>;
   generateExecutionPlans(teamId?: string): Promise<ExecutionPlan[]>;
   generateTeamSummary(teamId: string): Promise<TeamSummary>;
+  storeExecutionPlanMetadata(plan: ExecutionPlan, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<void>;
+  storeExecutionPlanComments(plan: ExecutionPlan): Promise<void>;
+  getExecutionPlanMetadata(ticketId: string, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<{ planId?: string; lastPlanDate?: string }>;
+  ensureCustomFieldDefinitions(teamId: string, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<void>;
 }
 
 export class LinearMCPClientImpl implements LinearMCPClient {
@@ -196,6 +203,60 @@ export class LinearMCPClientImpl implements LinearMCPClient {
     }
   }
 
+  async updateCustomField(ticketId: string, fieldId: string, value: string | number | boolean | string[]): Promise<void> {
+    await this.ensureConnected();
+    
+    try {
+      await this.client.callTool({
+        name: 'update_custom_field',
+        arguments: {
+          issueId: ticketId,
+          fieldId,
+          value,
+        },
+      });
+    } catch (error) {
+      console.error('Error updating custom field:', error);
+      throw new Error('Failed to update custom field');
+    }
+  }
+
+  async getCustomFields(ticketId: string): Promise<LinearCustomFieldValue[]> {
+    await this.ensureConnected();
+    
+    try {
+      const result = await this.client.callTool({
+        name: 'get_custom_fields',
+        arguments: {
+          issueId: ticketId,
+        },
+      });
+
+      const data = this.parseMCPResponse<{ customFields: LinearCustomFieldValue[] }>(result);
+      return data?.customFields || [];
+    } catch (error) {
+      console.error('Error fetching custom fields:', error);
+      throw new Error('Failed to fetch custom fields');
+    }
+  }
+
+  async getCustomFieldDefinitions(teamId?: string): Promise<LinearCustomField[]> {
+    await this.ensureConnected();
+    
+    try {
+      const result = await this.client.callTool({
+        name: 'get_custom_field_definitions',
+        arguments: teamId ? { teamId } : {},
+      });
+
+      const data = this.parseMCPResponse<{ customFields: LinearCustomField[] }>(result);
+      return data?.customFields || [];
+    } catch (error) {
+      console.error('Error fetching custom field definitions:', error);
+      throw new Error('Failed to fetch custom field definitions');
+    }
+  }
+
   async getUsers(): Promise<LinearUser[]> {
     await this.ensureConnected();
     
@@ -343,6 +404,117 @@ export class LinearMCPClientImpl implements LinearMCPClient {
     }
   }
 
+  /**
+   * Store execution plan metadata in Linear custom fields
+   */
+  async storeExecutionPlanMetadata(plan: ExecutionPlan, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<void> {
+    await this.ensureConnected();
+    
+    try {
+      // Store execution plan ID in custom field
+      await this.updateCustomField(plan.tickets.finished[0]?.id || plan.tickets.inProgress[0]?.id || plan.tickets.open[0]?.id, 
+        customFieldIds.executionPlanId, plan.planId);
+      
+      // Store last plan date in custom field
+      await this.updateCustomField(plan.tickets.finished[0]?.id || plan.tickets.inProgress[0]?.id || plan.tickets.open[0]?.id, 
+        customFieldIds.lastPlanDate, plan.generatedAt.toISOString());
+        
+      console.log(`Stored execution plan metadata for plan ${plan.planId}`);
+    } catch (error) {
+      console.error('Error storing execution plan metadata:', error);
+      throw new Error('Failed to store execution plan metadata');
+    }
+  }
+
+  /**
+   * Store execution plan summary as a comment on each ticket
+   */
+  async storeExecutionPlanComments(plan: ExecutionPlan): Promise<void> {
+    await this.ensureConnected();
+    
+    try {
+      const comment = this.formatExecutionPlanComment(plan);
+      
+      // Add comment to all tickets in the plan
+      const allTickets = [...plan.tickets.finished, ...plan.tickets.inProgress, ...plan.tickets.open];
+      
+      for (const ticket of allTickets) {
+        await this.addTicketComment(ticket.id, comment);
+      }
+      
+      console.log(`Stored execution plan comments for plan ${plan.planId} on ${allTickets.length} tickets`);
+    } catch (error) {
+      console.error('Error storing execution plan comments:', error);
+      throw new Error('Failed to store execution plan comments');
+    }
+  }
+
+  /**
+   * Retrieve execution plan metadata from Linear
+   */
+  async getExecutionPlanMetadata(ticketId: string, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<{ planId?: string; lastPlanDate?: string }> {
+    await this.ensureConnected();
+    
+    try {
+      const customFields = await this.getCustomFields(ticketId);
+      
+      const planIdField = customFields.find(field => field.customField.id === customFieldIds.executionPlanId);
+      const lastPlanDateField = customFields.find(field => field.customField.id === customFieldIds.lastPlanDate);
+      
+      return {
+        planId: planIdField?.value as string,
+        lastPlanDate: lastPlanDateField?.value as string,
+      };
+    } catch (error) {
+      console.error('Error retrieving execution plan metadata:', error);
+      throw new Error('Failed to retrieve execution plan metadata');
+    }
+  }
+
+  /**
+   * Create or update custom field definitions for execution plan storage
+   */
+  async ensureCustomFieldDefinitions(teamId: string, customFieldIds: { executionPlanId: string; lastPlanDate: string }): Promise<void> {
+    await this.ensureConnected();
+    
+    try {
+      const existingFields = await this.getCustomFieldDefinitions(teamId);
+      
+      // Check if execution plan ID field exists
+      const executionPlanIdField = existingFields.find(field => field.id === customFieldIds.executionPlanId);
+      if (!executionPlanIdField) {
+        await this.client.callTool({
+          name: 'create_custom_field_definition',
+          arguments: {
+            teamId,
+            name: 'Execution Plan ID',
+            type: 'text',
+            description: 'Stores the execution plan ID for this ticket',
+          },
+        });
+      }
+      
+      // Check if last plan date field exists
+      const lastPlanDateField = existingFields.find(field => field.id === customFieldIds.lastPlanDate);
+      if (!lastPlanDateField) {
+        await this.client.callTool({
+          name: 'create_custom_field_definition',
+          arguments: {
+            teamId,
+            name: 'Last Plan Date',
+            type: 'date',
+            description: 'Stores the last execution plan date for this ticket',
+          },
+        });
+      }
+      
+      console.log('Ensured custom field definitions exist for execution plan storage');
+    } catch (error) {
+      console.error('Error ensuring custom field definitions:', error);
+      throw new Error('Failed to ensure custom field definitions');
+    }
+  }
+
   private parseMCPResponse<T>(result: unknown): T | null {
     interface MCPResponse {
       content?: Array<{ type: string; text: string }>;
@@ -374,6 +546,27 @@ export class LinearMCPClientImpl implements LinearMCPClient {
     const completionRate = total > 0 ? Math.round((finished.length / total) * 100) : 0;
     
     return `You have ${total} total tickets: ${finished.length} completed, ${inProgress.length} in progress, and ${open.length} open. Completion rate: ${completionRate}%.`;
+  }
+
+  private formatExecutionPlanComment(plan: ExecutionPlan): string {
+    const date = plan.generatedAt.toLocaleDateString();
+    const time = plan.generatedAt.toLocaleTimeString();
+    
+    return `📋 **Execution Plan - ${date} at ${time}**
+
+**Summary**: ${plan.summary}
+
+**Completed Tickets** (${plan.tickets.finished.length}):
+${plan.tickets.finished.map(ticket => `✅ ${ticket.identifier}: ${ticket.title}`).join('\n')}
+
+**In Progress** (${plan.tickets.inProgress.length}):
+${plan.tickets.inProgress.map(ticket => `🔄 ${ticket.identifier}: ${ticket.title}`).join('\n')}
+
+**Open Tickets** (${plan.tickets.open.length}):
+${plan.tickets.open.map(ticket => `📝 ${ticket.identifier}: ${ticket.title}`).join('\n')}
+
+---
+*Generated by Project Management Agent*`;
   }
 
   async disconnect(): Promise<void> {
