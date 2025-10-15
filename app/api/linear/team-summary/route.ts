@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLinearMCPClient } from '@/lib/mcp/linear-client';
+import { createPlanGenerator } from '@/lib/plan-generator';
+import { createConfigManager } from '@/lib/config/agent-config';
 
 export const runtime = 'nodejs';
 
@@ -15,12 +17,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }, { status: 400 });
     }
     
+    const configManager = createConfigManager();
+    const config = configManager.getPlanGenerationConfig();
+    
     const client = createLinearMCPClient();
-    await client.connect();
+    const planGenerator = createPlanGenerator(client, {
+      teamId,
+      includeCompletedTickets: config.includeCompletedTickets,
+      includeCanceledTickets: config.includeCanceledTickets,
+      maxTicketsPerUser: config.maxTicketsPerUser,
+    });
     
-    const summary = await client.generateTeamSummary(teamId);
-    
-    await client.disconnect();
+    const summary = await planGenerator.generateTeamSummary(teamId);
     
     return NextResponse.json({
       success: true,

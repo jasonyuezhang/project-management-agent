@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLinearMCPClient } from '@/lib/mcp/linear-client';
+import { createPlanGenerator } from '@/lib/plan-generator';
+import { createConfigManager } from '@/lib/config/agent-config';
 
 export const runtime = 'nodejs';
 
@@ -8,18 +10,29 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId');
     
+    const configManager = createConfigManager();
+    const config = configManager.getPlanGenerationConfig();
+    
     const client = createLinearMCPClient();
-    await client.connect();
+    const planGenerator = createPlanGenerator(client, {
+      teamId: teamId || undefined,
+      includeCompletedTickets: config.includeCompletedTickets,
+      includeCanceledTickets: config.includeCanceledTickets,
+      maxTicketsPerUser: config.maxTicketsPerUser,
+    });
     
-    const plans = await client.generateExecutionPlans(teamId || undefined);
-    
-    await client.disconnect();
+    const plans = await planGenerator.generateIndividualPlans(teamId || undefined);
     
     return NextResponse.json({
       success: true,
       data: {
         plans,
         generatedAt: new Date().toISOString(),
+        config: {
+          includeCompletedTickets: config.includeCompletedTickets,
+          includeCanceledTickets: config.includeCanceledTickets,
+          maxTicketsPerUser: config.maxTicketsPerUser,
+        },
       },
     });
   } catch (error) {
@@ -35,52 +48,45 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const body = await request.json();
-    const { teamId, userId } = body;
+    const { teamId, userId, config: customConfig } = body;
+    
+    const configManager = createConfigManager();
+    const baseConfig = configManager.getPlanGenerationConfig();
     
     const client = createLinearMCPClient();
-    await client.connect();
+    const planGenerator = createPlanGenerator(client, {
+      teamId: teamId || undefined,
+      includeCompletedTickets: customConfig?.includeCompletedTickets ?? baseConfig.includeCompletedTickets,
+      includeCanceledTickets: customConfig?.includeCanceledTickets ?? baseConfig.includeCanceledTickets,
+      maxTicketsPerUser: customConfig?.maxTicketsPerUser ?? baseConfig.maxTicketsPerUser,
+    });
     
     let plans;
     if (userId) {
       // Generate plan for specific user
-      const userTickets = await client.getTicketsByAssignee(userId);
-      const user = (await client.getUsers()).find(u => u.id === userId);
+      const users = await client.getUsers();
+      const user = users.find(u => u.id === userId);
       
       if (!user) {
         throw new Error('User not found');
       }
       
-      const finished = userTickets.filter(ticket => 
-        ticket.state.type === 'completed'
-      );
-      const inProgress = userTickets.filter(ticket => 
-        ticket.state.type === 'started'
-      );
-      const open = userTickets.filter(ticket => 
-        ['backlog', 'unstarted'].includes(ticket.state.type)
-      );
-      
-      const summary = `You have ${userTickets.length} total tickets: ${finished.length} completed, ${inProgress.length} in progress, and ${open.length} open.`;
-      
-      plans = [{
-        userId: user.id,
-        userName: user.displayName,
-        tickets: { finished, inProgress, open },
-        summary,
-        generatedAt: new Date(),
-        planId: `plan_${user.id}_${Date.now()}`,
-      }];
+      const plan = await planGenerator.generateUserPlan(user, teamId);
+      plans = plan ? [plan] : [];
     } else {
-      plans = await client.generateExecutionPlans(teamId);
+      plans = await planGenerator.generateIndividualPlans(teamId);
     }
-    
-    await client.disconnect();
     
     return NextResponse.json({
       success: true,
       data: {
         plans,
         generatedAt: new Date().toISOString(),
+        config: {
+          includeCompletedTickets: planGenerator.getConfig().includeCompletedTickets,
+          includeCanceledTickets: planGenerator.getConfig().includeCanceledTickets,
+          maxTicketsPerUser: planGenerator.getConfig().maxTicketsPerUser,
+        },
       },
     });
   } catch (error) {
