@@ -9,30 +9,37 @@
     "lint": "eslint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "test:phase-2-2": "jest --testPathPattern=enhanced-scheduler",
+    "example:phase-2-2": "tsx examples/phase-2-2-usage.ts"
   },
   "dependencies": {
-    "@openai/chatkit-react": ">=1.1.1 <2.0.0",
     "@modelcontextprotocol/sdk": "^0.5.0",
+    "@openai/chatkit-react": ">=1.1.1 <2.0.0",
+    "@types/node-cron": "^3.0.11",
+    "moment-timezone": "^0.6.0",
     "next": "^15.5.4",
+    "node-cron": "^4.2.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "sqlite3": "^5.1.7"
   },
   "optionalDependencies": {
-    "lightningcss-linux-x64-gnu": "1.30.1",
-    "@tailwindcss/oxide-linux-x64-gnu": "4.1.11"
+    "@tailwindcss/oxide-linux-x64-gnu": "4.1.11",
+    "lightningcss-linux-x64-gnu": "1.30.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@types/jest": "^29.5.12",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/jest": "^29.5.12",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
     "jest": "^29.7.0",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }
