@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { PlanGenerator, createPlanGenerator } from '../plan-generator.js';
-import { LinearMCPClient } from '../mcp/linear-client.js';
-import { LinearIssue, LinearUser, LinearTeam } from '../mcp/types.js';
+import { PlanGenerator, createPlanGenerator } from '../plan-generator';
+import { LinearMCPClient } from '../mcp/linear-client';
+import { LinearIssue, LinearUser, LinearTeam } from '../mcp/types';
 
 // Mock the Linear MCP Client
 const mockLinearClient: jest.Mocked<LinearMCPClient> = {

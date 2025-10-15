@@ -4,7 +4,7 @@ import { LinearIssue } from '../mcp/types.js';
 export class ReplyProcessor {
   private ticketIdPattern = /([A-Z]+-\d+)/g;
   private statusPattern = /(backlog|unstarted|in-progress|started|completed|canceled)/gi;
-  private userPattern = /@?([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z]{2,})|@?([a-zA-Z0-9._-]+)/g;
+  private userPattern = /@?([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z]{2,})/g;
 
   async parseUserReply(reply: string, userId: string): Promise<PlanModification[]> {
     const modifications: PlanModification[] = [];
@@ -83,7 +83,7 @@ export class ReplyProcessor {
     }
 
     const ticketId = ticketIdMatch[0];
-    const user = userMatch[0].replace('@', '');
+    const user = userMatch[0].startsWith('@') ? userMatch[0].substring(1) : userMatch[0];
 
     return {
       ticketId,

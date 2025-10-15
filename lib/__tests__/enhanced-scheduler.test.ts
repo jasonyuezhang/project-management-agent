@@ -5,10 +5,10 @@ import { PlanGenerator } from '../plan-generator.js';
 import { ExecutionPlan, TeamSummary } from '../mcp/types.js';
 
 // Mock dependencies
-jest.mock('../mcp/linear-client.js');
-jest.mock('../mcp/slack-client.js');
-jest.mock('../plan-generator.js');
-jest.mock('../monitoring/logger.js');
+jest.mock('../mcp/linear-client');
+jest.mock('../mcp/slack-client');
+jest.mock('../plan-generator');
+jest.mock('../monitoring/logger');
 
 describe('EnhancedPlanScheduler', () => {
   let scheduler: EnhancedPlanScheduler;
