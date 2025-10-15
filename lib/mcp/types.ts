@@ -133,3 +133,6 @@ export interface TicketFilter extends Record<string, unknown> {
   dueAfter?: string;
   dueBefore?: string;
 }
+
+// Re-export Slack types for convenience
+export * from './slack-types.js';
