@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSlackMCPClient } from '@/lib/mcp/slack-client';
 import { createReplyProcessor } from '@/lib/processors/reply-processor';
+import { createAdvancedSlackInteractionProcessor } from '@/lib/services/advanced-slack-interaction-processor';
 import { createConfirmationMessage, createErrorMessage, createHelpMessage } from '@/lib/templates/slack-templates';
+import { createLinearClient } from '@/lib/mcp/linear-client';
+import { logger } from '@/lib/monitoring/logger';
 import { createHash, timingSafeEqual } from 'crypto';
 
 // Verify Slack request signature
@@ -175,26 +178,22 @@ async function handleMessageEvent(payload: any): Promise<NextResponse> {
       }, { status: 400 });
     }
 
-    const slackClient = createSlackMCPClient();
-    const replyProcessor = createReplyProcessor();
-    
-    await slackClient.connect();
+    logger.info('Processing message event', {
+      channel,
+      user,
+      textLength: text.length,
+      threadTs
+    });
 
-    // Check if message contains modifications
-    if (replyProcessor.containsModifications(text)) {
-      await handleUserReply(slackClient, replyProcessor, channel, user, text, threadTs);
-    } else if (text.toLowerCase().includes('help')) {
-      await handleHelpRequest(slackClient, channel, threadTs);
-    }
-
-    await slackClient.disconnect();
+    // Use advanced processing for better user experience
+    await handleAdvancedUserReply(channel, user, text, threadTs);
 
     return NextResponse.json({
       success: true,
       message: 'Message processed'
     });
   } catch (error) {
-    console.error('Error handling message event:', error);
+    logger.error('Error handling message event:', error);
     return NextResponse.json({
       success: false,
       message: 'Failed to process message'
@@ -309,6 +308,158 @@ async function handleUserReply(
       threadTs
     );
     await slackClient.sendExecutionPlanMessage(errorMessage);
+  }
+}
+
+async function handleAdvancedUserReply(
+  channel: string,
+  user: string,
+  text: string,
+  threadTs?: string
+): Promise<void> {
+  try {
+    const slackClient = createSlackMCPClient();
+    const advancedProcessor = createAdvancedSlackInteractionProcessor();
+    const linearClient = createLinearClient();
+    
+    await slackClient.connect();
+
+    // Extract plan ID from thread context or message
+    const planId = await extractPlanIdFromContext(channel, threadTs, text);
+    if (!planId) {
+      logger.warn('No plan ID found for message', { channel, user, text });
+      return;
+    }
+
+    // Get team ID (this would typically be stored with the plan)
+    const teamId = process.env.LINEAR_TEAM_ID;
+    if (!teamId) {
+      logger.error('LINEAR_TEAM_ID not configured');
+      return;
+    }
+
+    // Fetch current data
+    const availableTickets = await linearClient.getTicketsByTeam(teamId);
+    const availableUsers = await linearClient.getTeamMembers(teamId);
+
+    // Get previous messages from thread
+    const previousMessages = await getThreadMessages(slackClient, channel, threadTs);
+
+    // Create context for advanced processing
+    const context = {
+      userId: user,
+      channelId: channel,
+      messageTs: threadTs,
+      planId,
+      teamId,
+      availableTickets,
+      availableUsers,
+      previousMessages,
+      userPermissions: {
+        allowedUsers: availableUsers.map(u => u.email),
+        canReassign: true,
+        canChangeStatus: true,
+        canAddComments: true
+      }
+    };
+
+    // Process the user's reply
+    const result = await advancedProcessor.processUserReply(text, context);
+
+    if (result.success && result.message) {
+      await slackClient.sendExecutionPlanMessage(result.message);
+      
+      // If there are modifications, apply them to Linear
+      if (result.modifications && result.modifications.length > 0) {
+        await applyModificationsToLinear(result.modifications, linearClient);
+      }
+    } else {
+      // Fallback to basic processing
+      await handleUserReply(slackClient, createReplyProcessor(), channel, user, text, threadTs);
+    }
+
+    await slackClient.disconnect();
+  } catch (error) {
+    logger.error('Error in advanced user reply processing:', error);
+    
+    // Fallback to basic processing
+    try {
+      const slackClient = createSlackMCPClient();
+      const replyProcessor = createReplyProcessor();
+      await slackClient.connect();
+      await handleUserReply(slackClient, replyProcessor, channel, user, text, threadTs);
+      await slackClient.disconnect();
+    } catch (fallbackError) {
+      logger.error('Fallback processing also failed:', fallbackError);
+    }
+  }
+}
+
+async function extractPlanIdFromContext(
+  channel: string,
+  threadTs: string | undefined,
+  text: string
+): Promise<string | null> {
+  // Try to extract plan ID from the message text
+  const planIdMatch = text.match(/plan[_-]?id[:\s]+([a-zA-Z0-9-_]+)/i);
+  if (planIdMatch) {
+    return planIdMatch[1];
+  }
+
+  // Try to extract from thread context
+  if (threadTs) {
+    // This would typically query a database or cache for the plan ID
+    // For now, return a placeholder
+    return 'plan-' + Date.now();
+  }
+
+  return null;
+}
+
+async function getThreadMessages(
+  slackClient: any,
+  channel: string,
+  threadTs: string | undefined
+): Promise<Array<{ content: string; timestamp: Date; userId: string }>> {
+  if (!threadTs) {
+    return [];
+  }
+
+  try {
+    // This would typically fetch thread messages from Slack API
+    // For now, return empty array
+    return [];
+  } catch (error) {
+    logger.error('Error fetching thread messages:', error);
+    return [];
+  }
+}
+
+async function applyModificationsToLinear(
+  modifications: any[],
+  linearClient: any
+): Promise<void> {
+  try {
+    for (const modification of modifications) {
+      switch (modification.action) {
+        case 'status_change':
+          await linearClient.updateTicketStatus(modification.ticketId, modification.value);
+          break;
+        case 'reassign':
+          await linearClient.updateTicketAssignee(modification.ticketId, modification.value);
+          break;
+        case 'comment':
+          await linearClient.addTicketComment(modification.ticketId, modification.value);
+          break;
+      }
+    }
+    
+    logger.info('Successfully applied modifications to Linear', {
+      modificationsCount: modifications.length
+    });
+  } catch (error) {
+    logger.error('Error applying modifications to Linear:', error);
+    throw error;
   }
 }
 
