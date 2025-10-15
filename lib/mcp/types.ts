@@ -83,6 +83,17 @@ export interface LinearCustomFieldValue {
   customField: LinearCustomField;
 }
 
+export interface ExecutionPlanMetadata {
+  planId: string;
+  lastPlanDate: string;
+  userId: string;
+  userName: string;
+  ticketCount: number;
+  completedCount: number;
+  inProgressCount: number;
+  openCount: number;
+}
+
 // MCP Response Types
 export interface LinearMCPResponse<T = unknown> {
   success: boolean;

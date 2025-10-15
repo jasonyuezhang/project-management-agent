@@ -1,6 +1,7 @@
 import { LinearMCPClient } from '../mcp/linear-client.js';
 import { PlanModification, ExecutionPlan } from '../mcp/types.js';
 import { logger } from '../monitoring/logger.js';
+import { LinearStorageService, LinearStorageConfig } from '../services/linear-storage-service.js';
 
 export interface UpdateResult {
   ticketId: string;
@@ -31,9 +32,10 @@ export interface UpdateOptions {
 
 export class LinearUpdater {
   private linearClient: LinearMCPClient;
+  private storageService?: LinearStorageService;
   private options: Required<UpdateOptions>;
 
-  constructor(linearClient: LinearMCPClient, options: UpdateOptions = {}) {
+  constructor(linearClient: LinearMCPClient, options: UpdateOptions = {}, storageConfig?: LinearStorageConfig) {
     this.linearClient = linearClient;
     this.options = {
       retryAttempts: 3,
@@ -43,6 +45,10 @@ export class LinearUpdater {
       batchSize: 10,
       ...options,
     };
+    
+    if (storageConfig) {
+      this.storageService = new LinearStorageService(linearClient, storageConfig);
+    }
   }
 
   /**
@@ -233,6 +239,90 @@ export class LinearUpdater {
       logger.error(`Failed to create execution plan comment on ticket ${ticketId}`, {
         error: error instanceof Error ? error.message : 'Unknown error',
         planId: plan.planId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Store execution plan using Linear as primary storage
+   */
+  async storeExecutionPlan(plan: ExecutionPlan): Promise<void> {
+    if (!this.storageService) {
+      throw new Error('Storage service not configured. Please provide storageConfig when creating LinearUpdater.');
+    }
+
+    try {
+      const result = await this.storageService.storeExecutionPlan(plan);
+      
+      if (!result.success) {
+        const errorMsg = `Failed to store execution plan: ${result.errors.join(', ')}`;
+        logger.error(errorMsg, { planId: plan.planId });
+        throw new Error(errorMsg);
+      }
+
+      logger.info(`Successfully stored execution plan ${plan.planId}`, {
+        ticketsUpdated: result.ticketsUpdated,
+        commentsAdded: result.commentsAdded,
+        customFieldsUpdated: result.customFieldsUpdated,
+      });
+    } catch (error) {
+      logger.error(`Failed to store execution plan ${plan.planId}`, {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Store multiple execution plans using Linear as primary storage
+   */
+  async storeExecutionPlans(plans: ExecutionPlan[]): Promise<void> {
+    if (!this.storageService) {
+      throw new Error('Storage service not configured. Please provide storageConfig when creating LinearUpdater.');
+    }
+
+    try {
+      const results = await this.storageService.storeExecutionPlans(plans);
+      
+      const successful = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+      
+      if (failed > 0) {
+        const failedPlans = results.filter(r => !r.success).map(r => r.planId);
+        logger.warn(`Some execution plans failed to store`, {
+          successful,
+          failed,
+          failedPlans,
+        });
+      }
+
+      logger.info(`Stored ${successful}/${plans.length} execution plans`, {
+        successful,
+        failed,
+      });
+    } catch (error) {
+      logger.error(`Failed to store execution plans`, {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        planCount: plans.length,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieve execution plan metadata from Linear
+   */
+  async getExecutionPlanMetadata(ticketId: string): Promise<any> {
+    if (!this.storageService) {
+      throw new Error('Storage service not configured. Please provide storageConfig when creating LinearUpdater.');
+    }
+
+    try {
+      return await this.storageService.getExecutionPlanMetadata(ticketId);
+    } catch (error) {
+      logger.error(`Failed to retrieve execution plan metadata for ticket ${ticketId}`, {
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
       throw error;
     }
@@ -538,7 +628,8 @@ ${plan.tickets.open.map(ticket => `📝 ${ticket.identifier}: ${ticket.title}`).
  */
 export function createLinearUpdater(
   linearClient: LinearMCPClient,
-  options?: UpdateOptions
+  options?: UpdateOptions,
+  storageConfig?: LinearStorageConfig
 ): LinearUpdater {
-  return new LinearUpdater(linearClient, options);
+  return new LinearUpdater(linearClient, options, storageConfig);
 }
