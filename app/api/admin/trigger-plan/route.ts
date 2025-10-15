@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLinearMCPClient } from '@/lib/mcp/linear-client';
 import { createSlackMCPClient } from '@/lib/mcp/slack-client';
 import { createPlanGenerator } from '@/lib/plan-generator';
-import { createPlanScheduler } from '@/lib/scheduler';
+import { createEnhancedPlanScheduler } from '@/lib/enhanced-scheduler';
 import { createConfigManager } from '@/lib/config/agent-config';
 
 export const runtime = 'nodejs';
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       maxTicketsPerUser: config.planGeneration.maxTicketsPerUser,
     });
     
-    const scheduler = createPlanScheduler(linearClient, slackClient, planGenerator);
+    const scheduler = createEnhancedPlanScheduler(linearClient, slackClient, planGenerator);
     
     const session = await scheduler.triggerManualExecution(adminUserId, teamId);
     

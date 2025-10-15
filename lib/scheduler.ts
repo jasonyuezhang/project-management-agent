@@ -3,6 +3,12 @@ import { LinearMCPClient } from './mcp/linear-client.js';
 import { SlackMCPClient } from './mcp/slack-client.js';
 import { ExecutionPlan, TeamSummary } from './mcp/types.js';
 import { createExecutionPlanMessage, createTeamSummaryMessage } from './templates/slack-templates.js';
+import * as cron from 'node-cron';
+import * as moment from 'moment-timezone';
+import * as sqlite3 from 'sqlite3';
+import { promisify } from 'util';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export interface ScheduleConfig {
   cronExpression: string;
